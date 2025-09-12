@@ -23,7 +23,7 @@
     <div class="card">
       <div id="morseConfig" style="display:none;">
         <label for="ditDuration">Dit Dauer (ms):</label>
-        <input type="number" id="ditDuration", class="cut-card-txt" value="200">
+        <input type="number" id="ditDuration" class="cut-card-txt" value="200">
       
         <div class="cut-card">
           <div class="visualization">
@@ -92,7 +92,6 @@
         tableContainer.innerHTML = '<em>Morse-Tabelle konnte nicht geladen werden.</em>';
         return;
       }
-      // Sortierte Zeichen (Buchstaben, Zahlen, Sonderzeichen)
       const keys = Object.keys(morseMap).filter(k => k !== ' ');
       let html = '<table class="morse-table"><thead><tr><th>Zeichen</th><th>Morsecode</th></tr></thead><tbody>';
       keys.forEach(key => {
