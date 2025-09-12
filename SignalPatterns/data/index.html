@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Muster Editor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Muster Editor</h1>
+    
+    <div class="card">
+      <div class="switch-container">
+        <span class="switch-label">Morse Code Modus</span>
+        <label class="switch">
+          <input type="checkbox" id="modeSwitch">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div id="morseConfig" style="display:none;">
+        <label for="ditDuration">Dit Dauer (ms):</label>
+        <input type="number" id="ditDuration", class="cut-card-txt" value="200">
+      
+        <div class="cut-card">
+          <div class="visualization">
+            <div class="pwm-line" id="morsePwmLine">
+              <div class="signal-canvas" id="morseSignalCanvas"></div>
+              <div class="time-axis" id="morseTimeAxis"></div>
+            </div>
+          </div>
+        </div>  
+        
+        <label for="calculated-duration"></label>Durchgang:</label>
+        <span class="calculated-duration" id="calculated-duration"></span>
+
+        <div class="morse-display" id="morseDisplay"></div>
+
+        <label for="morseText">Text eingeben:</label>
+        <textarea id="morseText" class="cut-card-txt" placeholder="Geben Sie hier Ihren Text ein...">Glück - Ab!</textarea>
+        <div class="card">
+          <details id="morseTableCard">
+          <summary>Morsezeichen Übersicht</summary>
+          <div id="morseTableContainer"></div>
+      </details>
+    </div>
+      </div>
+
+      <div id="patternConfig" style="display:block;">
+      
+        <div class="cut-card">
+          <div class="visualization">
+            <div class="pwm-line" id="patternPwmLine">
+              <div class="y-axis"></div>
+              <div class="signal-canvas" id="patternSignalCanvas"></div>
+              <div class="time-axis" id="patternTimeAxis"></div>
+            </div>
+          </div>
+        </div>
+        <div class="pattern-input">
+          <label for="calculated-duration"></label>Durchgang:</label>
+          <span class="calculated-duration" id="calculatedDuration"></span>
+          <label>Phasen-Dauern (ms):</label>
+          <div class="pattern-phases" id="patternPhases">
+            <!-- Tags werden hier dynamisch eingefügt -->
+            <input type="number" class="phase-input" id="phaseInput" placeholder="Phase hinzufügen..." min="1" />
+            <button id="clearPhasesBtn" class="button error" style="margin-left:8px; display:none;">Alle Löschen</button>
+          </div>
+        </div>
+        
+        <div class="button-group">
+          <button id="invertButton">Invertieren</button>
+        </div>
+      </div>        
+
+    </div>
+
+  <script src="script.js"></script>
+  <script>
+    // Dynamisch Morse-Tabelle generieren
+    document.addEventListener('DOMContentLoaded', function() {
+      const tableContainer = document.getElementById('morseTableContainer');
+      if (!tableContainer) return;
+      // Die MORSE_CODE Map aus script.js holen
+      let morseMap = window.MORSE_CODE;
+      if (!morseMap && typeof MORSE_CODE !== 'undefined') morseMap = MORSE_CODE;
+      if (!morseMap) {
+        // Fallback: per fetch script.js parsen (nur falls window.MORSE_CODE nicht geht)
+        tableContainer.innerHTML = '<em>Morse-Tabelle konnte nicht geladen werden.</em>';
+        return;
+      }
+      // Sortierte Zeichen (Buchstaben, Zahlen, Sonderzeichen)
+      const keys = Object.keys(morseMap).filter(k => k !== ' ');
+      let html = '<table class="morse-table"><thead><tr><th>Zeichen</th><th>Morsecode</th></tr></thead><tbody>';
+      keys.forEach(key => {
+        html += `<tr><td>${key}</td><td>${morseMap[key]}</td></tr>`;
+      });
+      html += '</tbody></table>';
+      tableContainer.innerHTML = html;
+    });
+  </script>
+</body>
+</html>
