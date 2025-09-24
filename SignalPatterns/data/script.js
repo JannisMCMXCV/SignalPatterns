@@ -400,59 +400,119 @@ function renderSpeakerTracks() {
 }
 
 // ---- Audio Playback (Loop) ----
+let loopTimerId = null;
+
+const LOOKAHEAD_SEC = 0.05; // 50 ms Vorlauf gegen setTimeout-Jitter
+const MASTER_HEADROOM = 0.2; // gegen Clipping
+
+function computeMasterDurationMs(tracks) {
+  if (!Array.isArray(tracks) || tracks.length === 0) return 0;
+  let maxMs = 0;
+  for (const segments of tracks) {
+    if (!Array.isArray(segments) || segments.length === 0) continue;
+    const total = segments.reduce((sum, seg) => sum + (Number(seg.duration) || 0), 0);
+    if (total > maxMs) maxMs = total;
+  }
+  return maxMs;
+}
+
 function playSpeakerLoop() {
   if (isPlaying) return;
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  // Manche Browser starten „suspended“
+  audioCtx.resume?.();
+
+  const masterDurationMs = computeMasterDurationMs(speakerTracks);
+  if (masterDurationMs <= 0) {
+    console.warn("Keine gültigen Segmente gefunden.");
+    return;
+  }
+  const masterDurationSec = masterDurationMs / 1000;
+
   isPlaying = true;
 
-  speakerTracks.forEach((segments, trackIndex) => {
-    if (segments.length === 0) return;
+  // Mix-Bus
+  const masterGain = audioCtx.createGain();
+  masterGain.gain.value = MASTER_HEADROOM;
+  masterGain.connect(audioCtx.destination);
 
-    let currentTime = audioCtx.currentTime;
+  function scheduleAllTracks(loopStartTimeSec) {
+    speakerTracks.forEach((segments) => {
+      if (!Array.isArray(segments) || segments.length === 0) return;
 
-    function scheduleTrack() {
-      let t = currentTime;
+      const trackGain = audioCtx.createGain();
+      trackGain.gain.value = 1.0;
+      trackGain.connect(masterGain);
 
+      let t = loopStartTimeSec;
       segments.forEach(seg => {
+        const wf = seg.waveform || "sine";
+        const freq = Number(seg.freq) || 440;
+        const durSec = (Number(seg.duration) || 0) / 1000;
+        const transition = seg.transition || "none";
+        if (durSec <= 0) return;
+
         const osc = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
+        const env = audioCtx.createGain();
 
-        osc.type = seg.waveform;
-        osc.frequency.value = seg.freq;
+        osc.type = wf;
+        osc.frequency.setValueAtTime(freq, t);
 
-        // Übergang simulieren
-        if (seg.transition === "linear") {
-          gainNode.gain.setValueAtTime(0, t);
-          gainNode.gain.linearRampToValueAtTime(1, t + 0.05);
-        } else if (seg.transition === "exp") {
-          gainNode.gain.setValueAtTime(0.001, t);
-          gainNode.gain.exponentialRampToValueAtTime(1, t + 0.1);
+        if (transition === "linear") {
+          env.gain.setValueAtTime(0, t);
+          env.gain.linearRampToValueAtTime(1, t + 0.05);
+        } else if (transition === "exp") {
+          env.gain.setValueAtTime(0.001, t);
+          env.gain.exponentialRampToValueAtTime(1, t + 0.1);
         } else {
-          gainNode.gain.setValueAtTime(1, t);
+          env.gain.setValueAtTime(1, t);
         }
 
-        osc.connect(gainNode).connect(audioCtx.destination);
+        osc.connect(env).connect(trackGain);
+
+        const segEnd = t + durSec;
         osc.start(t);
-        osc.stop(t + seg.duration / 1000);
+        osc.stop(segEnd);
 
-        t += seg.duration / 1000;
+        t = segEnd;
       });
+    });
+  }
 
-      // Loop planen
-      currentTime = t;
-      setTimeout(scheduleTrack, (t - audioCtx.currentTime) * 1000);
-    }
+  // Zeitanker + Loop-Index
+  let baseStartTimeSec = audioCtx.currentTime + LOOKAHEAD_SEC;
+  let loopIndex = 0;
 
-    scheduleTrack();
-  });
+  // Ersten Loop absolut planen
+  scheduleAllTracks(baseStartTimeSec);
+
+  function scheduleNextLoop() {
+    if (!isPlaying || !audioCtx) return;
+
+    const nextStartSec = baseStartTimeSec + (loopIndex + 1) * masterDurationSec;
+
+    // Nächste Planung so timen, dass wir LOOKAHEAD vor nextStartSec planen
+    let callInMs = (nextStartSec - audioCtx.currentTime - LOOKAHEAD_SEC) * 1000;
+    if (callInMs < 1) callInMs = 1; // Sicherheitsminimum
+
+    loopTimerId = setTimeout(() => {
+      // Absolut auf die Audiozeit planen
+      scheduleAllTracks(nextStartSec);
+      loopIndex++;
+      scheduleNextLoop();
+    }, callInMs);
+  }
+
+  scheduleNextLoop();
 }
 
 function stopSpeakerLoop() {
-  if (audioCtx) {
-    audioCtx.close();
-    audioCtx = null;
+  if (loopTimerId) {
+    clearTimeout(loopTimerId);
+    loopTimerId = null;
   }
   isPlaying = false;
+  audioCtx.close(); audioCtx = null;
 }
 
 // ---- Autosave Debounce ----
