@@ -114,7 +114,7 @@ function createPatternButtons() {
   // Entferne alte Buttons
   Array.from(patternConfig.querySelectorAll('.pattern-btn')).forEach(btn => btn.remove());
   const playBtn = document.createElement('button');
-  playBtn.textContent = '▶️ Play Muster';
+  playBtn.textContent = '▶ Play Muster';
   playBtn.className = 'pattern-btn';
   playBtn.onclick = function() { playPatternSegments(); };
   const stopBtn = document.createElement('button');
@@ -130,7 +130,7 @@ function createMorseButtons() {
   if (!morseConfig) return;
   Array.from(morseConfig.querySelectorAll('.morse-btn')).forEach(btn => btn.remove());
   const playBtn = document.createElement('button');
-  playBtn.textContent = '▶️ Play Morse';
+  playBtn.textContent = '▶ Play Morse';
   playBtn.className = 'morse-btn';
   playBtn.onclick = function() { playMorseSegments(); };
   const stopBtn = document.createElement('button');
@@ -536,7 +536,7 @@ function saveSpeakerData() {
 
 // ---- Beispiel Buttons für Play/Stop ----
 const playBtn = document.createElement("button");
-playBtn.textContent = "▶️ Play";
+playBtn.textContent = "▶ Play";
 playBtn.onclick = playSpeakerLoop;
 
 const stopBtn = document.createElement("button");
@@ -575,9 +575,9 @@ function createEditModal() {
       </select>
 
       <div class="edit-actions">
-        <button id="saveSegmentBtn">💾 Speichern</button>
+        <button id="saveSegmentBtn">✓ Speichern</button>
         <button id="deleteSegmentBtn">🗑 Löschen</button>
-        <button id="cancelEditBtn">✖ Abbrechen</button>
+        <button id="cancelEditBtn">✕ Abbrechen</button>
       </div>
     </div>
   `;
@@ -878,7 +878,7 @@ function addPhaseTag(state, duration, index) { //X
   
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'delete-btn';
-  deleteBtn.innerHTML = '&#x1F7A8;';
+  deleteBtn.innerHTML = '✕';
   deleteBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     if (isUpdating) return;
