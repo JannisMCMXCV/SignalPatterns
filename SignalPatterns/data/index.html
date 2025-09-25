@@ -150,40 +150,117 @@
   </div>
   
   <script>
-    (() => {
-        console.log('Template Processing START');
-        
+    // Globale Template-Engine
+    window.TemplateEngine = {
+      config: null,
+      initialized: false,
+      
+      // Template-Strings ersetzen
+      processElement: function(element) {
+        if (!this.config) return;
+
+        // Text-Knoten verarbeiten
+        const walker = document.createTreeWalker(
+          element,
+          NodeFilter.SHOW_TEXT,
+          null,
+          false
+        );
+
+        const textNodes = [];
+        let node;
+        while (node = walker.nextNode()) {
+          textNodes.push(node);
+        }
+
+        textNodes.forEach(textNode => {
+          let text = textNode.textContent;
+          let changed = false;
+
+          Object.keys(this.config).forEach(key => {
+            const placeholder = `{{${key}}}`;
+            if (text.includes(placeholder)) {
+              text = text.replace(new RegExp(placeholder, 'g'), this.config[key] || '');
+              changed = true;
+            }
+          });
+
+          if (changed) {
+            textNode.textContent = text;
+          }
+        });
+
+        // Attribute verarbeiten
+        const elementsWithAttributes = element.querySelectorAll('*');
+        elementsWithAttributes.forEach(el => {
+          Array.from(el.attributes).forEach(attr => {
+            Object.keys(this.config).forEach(key => {
+              const placeholder = `{{${key}}}`;
+              if (attr.value.includes(placeholder)) {
+                attr.value = attr.value.replace(
+                  new RegExp(placeholder, 'g'), 
+                  this.config[key] || ''
+                );
+              }
+            });
+          });
+        });
+      },
+
+      // Initialisierung
+      init: function() {
+        if (this.initialized) return;
+
         fetch('./config/config.json')
           .then(response => response.json())
           .then(config => {
+            this.config = config;
+
             // Title aktualisieren
             if (config.title) {
               document.title = config.title;
             }
-            
-            // Template verarbeiten
-            let template = document.getElementById('template').innerHTML;
-            
-            // Platzhalter ersetzen
-            Object.keys(config).forEach(key => {
-              const regex = new RegExp(`{{${key}}}`, 'g');
-              template = template.replace(regex, config[key] || '');
-            });
-            
-            // Template ersetzen
-            document.getElementById('template').innerHTML = template;
-            
-            // Globale Variable setzen
-            window.APP_CONFIG = config;
-            window.TEMPLATE_PROCESSED = true;
-            
-            console.log('Template Processing DONE');
+
+            // Initiale Verarbeitung
+            this.processElement(document.body);
+
+            // MutationObserver für zukünftige Änderungen
+            this.setupObserver();
+
+            // Event feuern
+            document.dispatchEvent(new CustomEvent('templateReady'));
           })
           .catch(error => {
-            console.error('Template Fehler:', error);
-            window.TEMPLATE_PROCESSED = true; // Auch bei Fehler weitermachen
+            console.error('Template loading failed:', error);
+            document.dispatchEvent(new CustomEvent('templateReady'));
           });
-      })();
+      },
+
+      // MutationObserver einrichten
+      setupObserver: function() {
+        const observer = new MutationObserver((mutations) => {
+          mutations.forEach((mutation) => {
+            if (mutation.type === 'childList') {
+              mutation.addedNodes.forEach((node) => {
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                  this.processElement(node);
+                }
+              });
+            }
+          });
+        });
+
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true
+        });
+
+        this.observer = observer;
+      }
+    };
+
+    // Template-Engine starten
+    window.TemplateEngine.init();
   </script>
     
   <script>

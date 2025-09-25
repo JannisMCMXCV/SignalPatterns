@@ -1267,4 +1267,7 @@ async function sendPatternData(segments) {
   console.log('POST /honkPattern:', payload);
 }
 
-window.onload = init;
+document.addEventListener('templateReady', function() {
+  console.log('Template engine ready, starting app initialization');
+  init();
+});
