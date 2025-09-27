@@ -1,0 +1,12 @@
+{
+    "wifi": {
+        "ssid": "ESP32_DEVKIT_C_V4_HOTSPOT",
+        "pw": "T0P_S3CR37"
+    },
+
+    "domain": "yourcustomdomain",
+    
+    "gui": {
+        "title": "Your Custom Title"
+    }
+}
