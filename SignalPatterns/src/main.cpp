@@ -1,80 +1,45 @@
-#include <Arduino.h>
-#include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <LittleFS.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
-#include <math.h>
-#include <vector>
+#include <WiFi.h>
 
-#include "driver/dac.h"
 #include "main.h"
 
-#define GPIO_HORN           13
-
-#define GPIO_SIGNAL_ENABLE  34 // HIGH: Enable
-#define GPIO_SIGNAL_SELECT  35 // HIGH: DEFAULT; LOW: EMERGENCY 
-
-#define GPIO_HORN_ENABLE    12 // LOW: Enable; enables usage of real Horn (otherwise uses synthezised sound played via DAC)
-#define GPIO_HONK_EMERGENCY 14 // LOW: Enable; If enabled, all siganls are created using horn. (sound may be synthesized and played via DAC, depending on other inputs.)
-
-
+// --------------------------------------
+// Globale Variablen-Definitionen
+// --------------------------------------
 DNSServer dnsServer;
 AsyncWebServer server(80);
 
-// --------------------------------------
-// Konfiguration
-// --------------------------------------
-constexpr uint32_t SAMPLE_RATE      = 44100;   // ggf. 32000 für geringere Last
-constexpr uint32_t LINEAR_FADE_MS   = 50;      // Dauer des linearen Fade-Ins
-constexpr uint32_t EXP_TAU_MS       = 100;     // Zeitkonstante für exp-Fade-In
-
-// --------------------------------------
-// Datentypen
-// --------------------------------------
-enum WaveForm : uint8_t { WF_SINE=0, WF_SQUARE=1, WF_SAW=2, WF_TRI=3 };
-enum Transition : uint8_t { TR_LINEAR=0, TR_EXP=1, TR_NONE=2 };
-
-struct TrackSegment {
-  float    freq;        // Hz
-  uint8_t  waveForm;    // siehe WaveForm
-  uint16_t durationMs;  // ms
-  uint8_t  transition;  // siehe Transition
+std::array<std::vector<TrackSegment>, 4> tracks;
+std::array<std::vector<TrackSegment>, 4> synthHorn = {
+  std::vector<TrackSegment>{ TrackSegment{335.0f, WaveForm::WF_SQUARE, 10000, Transition::TR_NONE} },
+  std::vector<TrackSegment>{ TrackSegment{335.0f, WaveForm::WF_SQUARE, 10000, Transition::TR_NONE} },
+  std::vector<TrackSegment>{ TrackSegment{335.0f, WaveForm::WF_SQUARE, 10000, Transition::TR_NONE} },
+  std::vector<TrackSegment>{ TrackSegment{335.0f, WaveForm::WF_SQUARE, 10000, Transition::TR_NONE} }
 };
 
-std::vector<std::vector<TrackSegment>> tracks;
-std::vector<std::vector<TrackSegment>> synthHorn = {
-    {{335.0f, 1, 10000, 0}},
-    {{335.0f, 1, 10000, 0}},
-    {{335.0f, 1, 10000, 0}},
-    {{335.0f, 1, 10000, 0}}
-};
-
-// --------------------------------------
-// Globale Zustände
-// --------------------------------------
 volatile bool dacIsPlaying     = false;
 volatile bool stopDacRequested = false;
 
 hw_timer_t* timer = nullptr;
 
-// Master-Loop
 int       masterTrackIndex      = -1;
-uint32_t  masterTotalSamples    = 0;     // Summe aller Segmentsamples des Master-Tracks
-uint32_t  masterSamplesLeft     = 0;     // Zähler für den Loop (zählt runter)
+uint32_t  masterTotalSamples    = 0;
+uint32_t  masterSamplesLeft     = 0;
 
-// Pro Track
-int       currentSegmentIndices[4]   = {0,0,0,0};
-uint32_t  segSamplesLeft[4]          = {0,0,0,0};  // wie lange bis Segmentende (Samples)
-uint32_t  segElapsedSamples[4]       = {0,0,0,0};  // seit Segmentstart (Samples)
-float     phaseAccumulators[4]       = {0,0,0,0};  // Phase in Radiant
-float     phaseStep[4]               = {0,0,0,0};  // 2*pi*freq/SR
-float     gainExp[4]                 = {0,0,0,0};  // Zustand für exp-Fade
+int       currentSegmentIndices[4] = {0,0,0,0};
+uint32_t  segSamplesLeft[4]        = {0,0,0,0};
+uint32_t  segElapsedSamples[4]     = {0,0,0,0};
+float     phaseAccumulators[4]     = {0,0,0,0};
+float     phaseStep[4]             = {0,0,0,0};
+float     gainExp[4]               = {0,0,0,0};
 
-// Konstanten für Hüllkurven (einmal berechnet)
-uint32_t  linearFadeSamples = 1;
-float     invLinearFadeSamples = 1.0f;
-float     expAlpha = 0.0f;  // 1 - exp(-1/tauSamples)
+uint32_t  linearFadeSamples        = 1;
+float     invLinearFadeSamples     = 1.0f;
+float     expAlpha                 = 0.0f;
 
 // --------------------------------------
 // Hilfsfunktionen (nicht im ISR ändern)
@@ -90,19 +55,19 @@ static inline void updatePhaseStep(int trackIdx, float freq) {
   phaseStep[trackIdx] = 2.0f * (float)M_PI * freq / (float)SAMPLE_RATE;
 }
 
-static inline float generateWave(uint8_t waveForm, float phase) {
+static inline float generateWave(WaveForm waveForm, float phase) {
   // Liefert -1..+1
   switch (waveForm) {
-    case WF_SINE:
+    case WaveForm::WF_SINE:
       return sinf(phase);
-    case WF_SQUARE:
+    case WaveForm::WF_SQUARE:
       return sinf(phase) >= 0.0f ? 1.0f : -1.0f;
-    case WF_SAW: {
+    case WaveForm::WF_SAW: {
       // 0..2pi -> -1..+1 (ansteigende Säge)
       float x = phase / (float)M_PI;   // 0..2
       return x - 1.0f;                 // -1..+1
     }
-    case WF_TRI: {
+    case WaveForm::WF_TRI: {
       // Dreieck aus Phase (0..2pi)
       float t = phase / (2.0f * (float)M_PI);    // 0..1
       float tri = 2.0f * fabsf(2.0f * (t - floorf(t + 0.5f))) - 1.0f; // -1..1
@@ -119,7 +84,7 @@ void determineMasterTrack() {
 
   for (int i = 0; i < 4; ++i) {
     uint32_t totalMs = 0;
-    for (const auto& seg : tracks[i]) totalMs += seg.durationMs;
+    for (const auto& seg : tracks[i]) totalMs += seg.duration;
     uint32_t totalSamples = msToSamples(totalMs);
     if (totalSamples > maxDurationSamples) {
       maxDurationSamples = totalSamples;
@@ -150,7 +115,12 @@ void initAudioEngine() {
   timer = timerBegin(0, 80, true);
   timerAttachInterrupt(timer, []() IRAM_ATTR {
     // ---------------- ISR: Audio pro Sample ----------------
-    if (!dacIsPlaying || stopDacRequested || masterTrackIndex == -1) return;
+    if (stopDacRequested) {
+      dacIsPlaying = false;
+      stopDacRequested = false;
+      return;
+}
+    if (!dacIsPlaying || masterTrackIndex == -1) return;
 
     // Master-Loop runterzählen
     if (masterSamplesLeft > 0) {
@@ -163,10 +133,10 @@ void initAudioEngine() {
         currentSegmentIndices[i] = 0;
         segElapsedSamples[i]     = 0;
         if (!tracks[i].empty()) {
-          segSamplesLeft[i] = msToSamples(tracks[i][0].durationMs);
+          segSamplesLeft[i] = msToSamples(tracks[i][0].duration);
           phaseAccumulators[i] = 0.0f;
           updatePhaseStep(i, tracks[i][0].freq);
-          gainExp[i] = (tracks[i][0].transition == TR_EXP) ? 0.001f : 1.0f;
+          gainExp[i] = (tracks[i][0].transition == Transition::TR_EXP) ? 0.001f : 1.0f;
         } else {
           segSamplesLeft[i] = 0;
           phaseAccumulators[i] = 0.0f;
@@ -191,19 +161,19 @@ void initAudioEngine() {
       // Hüllkurve (Gain 0..1)
       float g = 1.0f;
       switch (seg.transition) {
-        case TR_LINEAR:
+        case Transition::TR_LINEAR:
           if (segElapsedSamples[t] < linearFadeSamples)
             g = (float)segElapsedSamples[t] * invLinearFadeSamples;
           else
             g = 1.0f;
           break;
-        case TR_EXP:
+        case Transition::TR_EXP:
           // One-pole Richtung 1.0
           gainExp[t] += (1.0f - gainExp[t]) * expAlpha;
           if (gainExp[t] > 1.0f) gainExp[t] = 1.0f;
           g = gainExp[t];
           break;
-        case TR_NONE:
+        case Transition::TR_NONE:
         default:
           g = 1.0f;
           break;
@@ -231,9 +201,9 @@ void initAudioEngine() {
 
         if (!tracks[t].empty()) {
           const TrackSegment& nextSeg = tracks[t][nextIdx];
-          segSamplesLeft[t] = msToSamples(nextSeg.durationMs);
+          segSamplesLeft[t] = msToSamples(nextSeg.duration);
           updatePhaseStep(t, nextSeg.freq);
-          gainExp[t] = (nextSeg.transition == TR_EXP) ? 0.001f : 1.0f;
+          gainExp[t] = (nextSeg.transition == Transition::TR_EXP) ? 0.001f : 1.0f;
         }
       }
     }
@@ -254,7 +224,7 @@ void initAudioEngine() {
   timerAlarmEnable(timer);
 }
 
-void playSpeakerLoop() {
+void playDACLoop() {
   if (dacIsPlaying) return;
   stopDacRequested = false;
   timerAlarmEnable(timer);
@@ -272,10 +242,10 @@ void playSpeakerLoop() {
     segElapsedSamples[i]     = 0;
     if (!tracks[i].empty()) {
       const auto& seg0 = tracks[i][0];
-      segSamplesLeft[i]    = msToSamples(seg0.durationMs);
+      segSamplesLeft[i]    = msToSamples(seg0.duration);
       phaseAccumulators[i] = 0.0f;
       updatePhaseStep(i, seg0.freq);
-      gainExp[i] = (seg0.transition == TR_EXP) ? 0.001f : 1.0f;
+      gainExp[i] = (seg0.transition == Transition::TR_EXP) ? 0.001f : 1.0f;
     } else {
       segSamplesLeft[i]    = 0;
       phaseAccumulators[i] = 0.0f;
@@ -290,7 +260,7 @@ void playSpeakerLoop() {
 }
 
 
-void stopSpeakerLoop() {
+void stopDACLoop() {
   stopDacRequested = true;
   delay(10); // allow interrupt to process stop request
   timerAlarmDisable(timer);
@@ -299,8 +269,7 @@ void stopSpeakerLoop() {
   resetDacOutput();
 }
 
-void resetDacOutput()
-{
+void resetDacOutput() {
   dac_output_voltage(DAC_CHANNEL_1, 128);
   dac_output_voltage(DAC_CHANNEL_2, 128);
 }
@@ -371,34 +340,31 @@ void setup() {
 }
 
 void updateDacSettings(String jsonTracks) {
-  boolean dacWasPlaying = false;
-  if (dacIsPlaying) {
-    dacIsPlaying != dacIsPlaying;
-    dacWasPlaying != dacWasPlaying;
-  }
+  boolean dacWasPlaying = dacIsPlaying;
+  if (dacIsPlaying) stopDACLoop();
   tracks = parseTracksFromJson(jsonTracks);
-  if (dacWasPlaying) dacWasPlaying != dacWasPlaying;
+  if (dacWasPlaying) playDACLoop();
 }
 
-int waveformFromString(const char* wf) {
-  if (strcmp(wf, "sine") == 0) return 0;
-  if (strcmp(wf, "square") == 0) return 1;
-  if (strcmp(wf, "sawtooth") == 0) return 2;
-  if (strcmp(wf, "triangle") == 0) return 3;
-  return 0; // Default: sine
+WaveForm waveformFromString(const char* wf) {
+  if (strcmp(wf, "sine") == 0) return WaveForm::WF_SINE;
+  if (strcmp(wf, "square") == 0) return WaveForm::WF_SQUARE;
+  if (strcmp(wf, "sawtooth") == 0) return WaveForm::WF_SAW;
+  if (strcmp(wf, "triangle") == 0) return WaveForm::WF_TRI;
+  return WaveForm::WF_SINE;
 }
 
-int transitionFromString(const char* tr) {
-  if (strcmp(tr, "linear") == 0) return 0;
-  if (strcmp(tr, "exp") == 0) return 1;
+Transition transitionFromString(const char* tr) {
+  if (strcmp(tr, "linear") == 0) return Transition::TR_LINEAR;
+  if (strcmp(tr, "exp") == 0) return Transition::TR_EXP;
   // "none" oder unbekannt -> linear als Default
-  return 0;
+  return Transition::TR_NONE;
 }
 
-std::vector<std::vector<TrackSegment>> parseTracksFromJson(const String& jsonTracks) {
-  std::vector<std::vector<TrackSegment>> tracksOut;
+std::array<std::vector<TrackSegment>, 4> parseTracksFromJson(const String& jsonTracks) {
+  std::array<std::vector<TrackSegment>, 4> tracksOut;
 
-  // ⚡ Wichtig: ausreichend großes JsonDocument anlegen
+  // !Wichtig!: ausreichend großes JsonDocument anlegen
   // Dein Beispiel-JSON ist ~600 Bytes groß, also nehmen wir hier 2048, um sicher zu gehen
   StaticJsonDocument<2048> doc;
 
@@ -410,17 +376,18 @@ std::vector<std::vector<TrackSegment>> parseTracksFromJson(const String& jsonTra
   }
 
   JsonArray tracks = doc["tracks"].as<JsonArray>();
-  for (JsonArray trackArray : tracks) {
-    std::vector<TrackSegment> track;
-    for (JsonObject seg : trackArray) {
-      TrackSegment ts;
-      ts.freq       = seg["freq"] | 0.0f;
-      ts.waveForm   = waveformFromString(seg["waveform"] | "");
-      ts.duration   = seg["duration"] | 0;
-      ts.transition = transitionFromString(seg["transition"] | "");
-      track.push_back(ts);
-    }
-    tracksOut.push_back(track);
+  uint8_t trackIdx = 0;
+  for (JsonArray trackArray : doc["tracks"].as<JsonArray>()) {
+      for (JsonObject seg : trackArray) {
+          TrackSegment ts;
+          ts.freq       = seg["freq"] | 0.0f;
+          ts.waveForm   = waveformFromString(seg["waveform"] | "");
+          ts.duration   = seg["duration"] | 0;
+          ts.transition = transitionFromString(seg["transition"] | "");
+
+          tracksOut[trackIdx].push_back(ts);
+      }
+      trackIdx++;
   }
 
   return tracksOut;
@@ -500,7 +467,7 @@ boolean useHornForEmergencySignal() {
 }
 
 void honk() {
-  if (synthesizeHorn) {
+  if (synthesizeHorn()) {
     playDACLoop();
   }
   realHonk();
@@ -511,7 +478,7 @@ void realHonk() {
 }
 
 void stopHonk() {
-  if (synthesizeHorn) {
+  if (synthesizeHorn()) {
     stopDACLoop();
   }
   stopRealHonk();
@@ -519,11 +486,4 @@ void stopHonk() {
 
 void stopRealHonk() {
   digitalWrite(GPIO_HORN, HIGH);
-}
-
-void playDACLoop(/* Signature missing! */) {
-}
-
-void stopDACLoop() {
-
 }
