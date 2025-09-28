@@ -1,5 +1,7 @@
 {
     "title": "MY FANCY SHMANZY TITLE",
     "on-off-patterns-heading": "ON-OFF PATTERNS",
-    "frequency-patterns-heading": "FREQUENCY PATTERNS"
+    "frequency-patterns-heading": "FREQUENCY PATTERNS",
+    "image-path": "img/image/REPLACE_THIS_WITH_YOUR_IMAGE.svg",
+    "favicon-path": "img/image/REPLACE_THIS_WITH_YOUR_FAVICON.ico"
 }

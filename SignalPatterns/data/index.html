@@ -262,20 +262,20 @@
     // Template-Engine starten
     window.TemplateEngine.init();
   </script>
-    
+
   <script>
   // Dynamisch Morse-Tabelle generieren
   document.addEventListener('DOMContentLoaded', function() {
     const tableContainer = document.getElementById('morseTableContainer');
     if (!tableContainer) return;
-    // Die MORSE_CODE Map aus script.js holen
+    // MORSE_CODE Map aus script.js holen
     let morseMap = window.MORSE_CODE;
     if (!morseMap && typeof MORSE_CODE !== 'undefined') morseMap = MORSE_CODE;
     if (!morseMap) {
       // Fallback: per fetch script.js parsen (nur falls window.MORSE_CODE nicht geht)
       tableContainer.innerHTML = '<em>Morse-Tabelle konnte nicht geladen werden.</em>';
       return;
-    }
+        }
     const keys = Object.keys(morseMap).filter(k => k !== ' ');
     let html = '<table class="morse-table"><thead><tr><th>Zeichen</th><th>Morsecode</th></tr></thead><tbody>';
       keys.forEach(key => {
@@ -283,6 +283,72 @@
       });
       html += '</tbody></table>';
       tableContainer.innerHTML = html;
+    });
+  </script>
+
+  <script>
+  document.addEventListener("DOMContentLoaded", async () => {
+
+    async function fetchConfig() {
+      try {
+        const response = await fetch("config/config.json");
+        if (!response.ok) throw new Error("Config not found");
+        return await response.json();
+      } catch (e) {
+        console.warn("Could not fetch config:", e);
+        return {};
+      }
+    }
+
+    function checkImage(src) {
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => resolve(src);
+        img.onerror = () => resolve(null);
+        img.src = src;
+      });
+    }
+
+ function insertImage(src) {
+  const h1 = document.querySelector("h1");
+  if (h1) {
+    const fontSize = parseFloat(getComputedStyle(h1).fontSize);
+
+    const div = document.createElement("div");
+    div.style.display = "flex";
+    div.style.justifyContent = "center"; // Bild horizontal zentrieren
+
+    const img = document.createElement("img");
+    img.src = src;
+    img.style.height = (fontSize * 7) + "px";
+
+    div.appendChild(img);
+    h1.insertAdjacentElement("afterend", div);
+  }
+}
+
+    function insertFavicon(src) {
+      let link = document.querySelector("link[rel~='icon']");
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = "icon";
+        link.type = "image/x-icon";
+        document.head.appendChild(link);
+      }
+      link.href = src;
+    }
+
+    const config = await fetchConfig();
+
+    if (config["image-path"]) {
+      const found = await checkImage(config["image-path"]);
+      if (found) insertImage(found);
+    }
+
+    if (config["favicon-path"]) {
+      const found = await checkImage(config["favicon-path"]);
+      if (found) insertFavicon(found);
+    }
     });
   </script>
 
