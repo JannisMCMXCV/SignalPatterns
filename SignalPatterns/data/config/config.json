@@ -1,12 +1,14 @@
 {
+    "title": "MY FANCY SHMANZY TITLE",
+    "on-off-patterns-heading": "ON-OFF PATTERNS",
+    "frequency-patterns-heading": "FREQUENCY PATTERNS",
+    "image-path": "img/image/REPLACE_THIS_WITH_YOUR_IMAGE.svg",
+    "favicon-path": "img/image/REPLACE_THIS_WITH_YOUR_FAVICON.ico"
+}
     "wifi": {
         "ssid": "ESP32_DEVKIT_C_V4_HOTSPOT",
         "pw": "T0P_S3CR37"
     },
 
     "domain": "yourcustomdomain",
-    
-    "gui": {
-        "title": "Your Custom Title"
-    }
 }

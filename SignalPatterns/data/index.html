@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title></title>
+    <title>Muster Editor</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+  <div id="template">
+    <h1>{{title}}</h1>
+    <div class="carousel-indicators">
+      <span class="indicator active" data-index="0"></span>
+      <span class="indicator" data-index="1"></span>
+    </div>
+    <div class="carousel">
+      <div class="carousel-item">
+        <h2>{{on-off-patterns-heading}}</h2>
+
+        <div class="card">
+          <div class="switch-container">
+            <span class="switch-label">Morse Code Modus</span>
+            <label class="switch">
+              <input type="checkbox" id="modeSwitch">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+      
+        <div class="card">
+          <div id="morseConfig" style="display:none;">
+            <label for="ditDuration">Dit Dauer (ms):</label>
+            <input type="number" id="ditDuration" class="cut-card-txt" value="200">
+
+            <div class="cut-card">
+              <div class="visualization">
+                <div class="pwm-line" id="morsePwmLine">
+                  <div class="signal-canvas" id="morseSignalCanvas"></div>
+                  <div class="time-axis" id="morseTimeAxis"></div>
+                </div>
+              </div>
+            </div>  
+
+            <span>1 Durchgang = </span>
+            <span class="calculated-duration" id="calculated-duration"></span>
+          
+            <div class="morse-display" id="morseDisplay"></div>
+          
+            <label for="morseText">Text eingeben:</label>
+            <textarea id="morseText" class="cut-card-txt" placeholder="Geben Sie hier Ihren Text ein...">Glück - Ab!</textarea>
+            <div class="card">
+              <details id="morseTableCard">
+                <summary>Morsezeichen Übersicht</summary>
+                <div id="morseTableContainer"></div>
+              </details>
+            </div>
+          </div>
+        
+        <div id="patternConfig" style="display:block;">
+
+            <div class="cut-card">
+              <div class="visualization">
+                <div class="pwm-line" id="patternPwmLine">
+                  <div class="y-axis"></div>
+                  <div class="signal-canvas" id="patternSignalCanvas"></div>
+                  <div class="time-axis" id="patternTimeAxis"></div>
+                </div>
+              </div>
+            </div>
+            <div class="pattern-input">
+              <span>1 Durchgang = </span>
+              <span class="calculated-duration" id="calculatedDuration"></span>
+              <label>Phasen-Dauern (ms):</label>
+              <div class="pattern-phases" id="patternPhases">
+                <!-- Tags werden hier dynamisch eingefügt -->
+                <input type="number" class="phase-input" id="phaseInput" placeholder="Phase hinzufügen..." min="1" />
+                <button id="clearPhasesBtn" class="button error" style="margin-left:8px; display:none;">Alle Löschen</button>
+              </div>
+            </div>
+
+            <div class="button-group">
+              <button id="invertButton">Invertieren</button>
+            </div>
+          </div>        
+        </div>
+      </div>
+
+      <div class="carousel-item">
+        <h2>{{frequency-patterns-heading}}</h2>
+        <div class="card">
+
+          <div class="track-selector">
+            <button class="track-btn active" data-track="1">Spur 1</button>
+            <button class="track-btn" data-track="2">Spur 2</button>
+            <button class="track-btn" data-track="3">Spur 3</button>
+            <button class="track-btn" data-track="4">Spur 4</button>
+          </div>
+        
+          <div class="cut-card">
+            <div class="visualization multi-track" id="speakerVisualization">
+              <!-- Jede Spur als Zeile -->
+              <div class="track" data-track="1"></div>
+              <div class="track" data-track="2"></div>
+              <div class="track" data-track="3"></div>
+              <div class="track" data-track="4"></div>
+            </div>
+          </div>
+        
+          <div class="segment-input">
+            <label>Frequenz (Hz):</label>
+            <input type="number" id="freqInput" min="20" max="20000" value="440">
+          
+            <label>Wellenform:</label>
+            <select id="waveformInput">
+              <option value="sine">Sinus </option>
+              <option value="square">Rechteck</option>
+              <option value="sawtooth">Sägezahn</option>
+              <option value="triangle">Dreieck</option>
+            </select>
+          
+            <label>Dauer (ms):</label>
+            <input type="number" id="durationInput" min="10" value="500">
+          
+            <label>Übergang:</label>
+            <select id="transitionInput">
+              <option value="none">Keiner</option>
+              <option value="linear">Linear</option>
+              <option value="exp">Exponentiell</option>
+            </select>
+          
+            <button id="addSegmentBtn">Segment hinzufügen</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="bmc-container">
+        <a href="https://buymeacoffee.com/mcmxcv" target="_blank" rel="noopener noreferrer">
+          <img src="img/bmc-brand-logo.svg" alt="https://buymeacoffee.com/mcmxcv">
+        </a>
+        <a href="https://buymeacoffee.com/mcmxcv" target="_blank" rel="noopener noreferrer">
+          <img src="img/buy_me_a_coffee.svg" alt="https://buymeacoffee.com/mcmxcv">
+        </a>
+        <div class="cut-card-txt">
+          <span class="tw-page-link truncate mr-3 xs:mr-0"><a href="https://buymeacoffee.com/mcmxcv" target="_blank" rel="noopener noreferrer">buymeacoffee.com/mcmxcv</a></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // Globale Template-Engine
+    window.TemplateEngine = {
+      config: null,
+      initialized: false,
+      
+      // Template-Strings ersetzen
+      processElement: function(element) {
+        if (!this.config) return;
+
+        // Text-Knoten verarbeiten
+        const walker = document.createTreeWalker(
+          element,
+          NodeFilter.SHOW_TEXT,
+          null,
+          false
+        );
+
+        const textNodes = [];
+        let node;
+        while (node = walker.nextNode()) {
+          textNodes.push(node);
+        }
+
+        textNodes.forEach(textNode => {
+          let text = textNode.textContent;
+          let changed = false;
+
+          Object.keys(this.config).forEach(key => {
+            const placeholder = `{{${key}}}`;
+            if (text.includes(placeholder)) {
+              text = text.replace(new RegExp(placeholder, 'g'), this.config[key] || '');
+              changed = true;
+            }
+          });
+
+          if (changed) {
+            textNode.textContent = text;
+          }
+        });
+
+        // Attribute verarbeiten
+        const elementsWithAttributes = element.querySelectorAll('*');
+        elementsWithAttributes.forEach(el => {
+          Array.from(el.attributes).forEach(attr => {
+            Object.keys(this.config).forEach(key => {
+              const placeholder = `{{${key}}}`;
+              if (attr.value.includes(placeholder)) {
+                attr.value = attr.value.replace(
+                  new RegExp(placeholder, 'g'), 
+                  this.config[key] || ''
+                );
+              }
+            });
+          });
+        });
+      },
+
+      // Initialisierung
+      init: function() {
+        if (this.initialized) return;
+
+        fetch('./config/config.json')
+          .then(response => response.json())
+          .then(config => {
+            this.config = config;
+
+            // Title aktualisieren
+            if (config.title) {
+              document.title = config.title;
+            }
+
+            // Initiale Verarbeitung
+            this.processElement(document.body);
+
+            // MutationObserver für zukünftige Änderungen
+            this.setupObserver();
+
+            // Event feuern
+            document.dispatchEvent(new CustomEvent('templateReady'));
+          })
+          .catch(error => {
+            console.error('Template loading failed:', error);
+            document.dispatchEvent(new CustomEvent('templateReady'));
+          });
+      },
+
+      // MutationObserver einrichten
+      setupObserver: function() {
+        const observer = new MutationObserver((mutations) => {
+          mutations.forEach((mutation) => {
+            if (mutation.type === 'childList') {
+              mutation.addedNodes.forEach((node) => {
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                  this.processElement(node);
+                }
+              });
+            }
+          });
+        });
+
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true
+        });
+
+        this.observer = observer;
+      }
+    };
+
+    // Template-Engine starten
+    window.TemplateEngine.init();
+  </script>
+
+  <script>
+  // Dynamisch Morse-Tabelle generieren
+  document.addEventListener('DOMContentLoaded', function() {
+    const tableContainer = document.getElementById('morseTableContainer');
+    if (!tableContainer) return;
+    // MORSE_CODE Map aus script.js holen
+    let morseMap = window.MORSE_CODE;
+    if (!morseMap && typeof MORSE_CODE !== 'undefined') morseMap = MORSE_CODE;
+    if (!morseMap) {
+      // Fallback: per fetch script.js parsen (nur falls window.MORSE_CODE nicht geht)
+      tableContainer.innerHTML = '<em>Morse-Tabelle konnte nicht geladen werden.</em>';
+      return;
+        }
+    const keys = Object.keys(morseMap).filter(k => k !== ' ');
+    let html = '<table class="morse-table"><thead><tr><th>Zeichen</th><th>Morsecode</th></tr></thead><tbody>';
+      keys.forEach(key => {
+        html += `<tr><td>${key}</td><td>${morseMap[key]}</td></tr>`;
+      });
+      html += '</tbody></table>';
+      tableContainer.innerHTML = html;
+    });
+  </script>
+
+  <script>
+  document.addEventListener("DOMContentLoaded", async () => {
+
+    async function fetchConfig() {
+      try {
+        const response = await fetch("config/config.json");
+        if (!response.ok) throw new Error("Config not found");
+        return await response.json();
+      } catch (e) {
+        console.warn("Could not fetch config:", e);
+        return {};
+      }
+    }
+
+    function checkImage(src) {
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => resolve(src);
+        img.onerror = () => resolve(null);
+        img.src = src;
+      });
+    }
+
+ function insertImage(src) {
+  const h1 = document.querySelector("h1");
+  if (h1) {
+    const fontSize = parseFloat(getComputedStyle(h1).fontSize);
+
+    const div = document.createElement("div");
+    div.style.display = "flex";
+    div.style.justifyContent = "center"; // Bild horizontal zentrieren
+
+    const img = document.createElement("img");
+    img.src = src;
+    img.style.height = (fontSize * 7) + "px";
+
+    div.appendChild(img);
+    h1.insertAdjacentElement("afterend", div);
+  }
+}
+
+    function insertFavicon(src) {
+      let link = document.querySelector("link[rel~='icon']");
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = "icon";
+        link.type = "image/x-icon";
+        document.head.appendChild(link);
+      }
+      link.href = src;
+    }
+
+    const config = await fetchConfig();
+
+    if (config["image-path"]) {
+      const found = await checkImage(config["image-path"]);
+      if (found) insertImage(found);
+    }
+
+    if (config["favicon-path"]) {
+      const found = await checkImage(config["favicon-path"]);
+      if (found) insertFavicon(found);
+    }
+    });
+  </script>
+
+  <script src="script.js"></script>
+
+  </body>
+</html>
