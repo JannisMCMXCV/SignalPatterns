@@ -40,6 +40,7 @@ struct TrackSegment {
 // --------------------------------------
 extern std::array<std::vector<TrackSegment>, 4> tracks;
 extern std::array<std::vector<TrackSegment>, 4> synthHorn;
+extern std::array<std::vector<TrackSegment>, 4>* activeTracks;
 
 extern volatile bool dacIsPlaying;
 extern volatile bool stopDacRequested;
@@ -68,6 +69,10 @@ void initAudioEngine();
 void playDACLoop();
 void stopDACLoop();
 void resetDacOutput();
+void honk();
+void stopHonk();
+void stopRealHorn();
+void playRealHorn();
 
 void determineMasterTrack();
 std::array<std::vector<TrackSegment>, 4> parseTracksFromJson(const String& jsonTracks);
