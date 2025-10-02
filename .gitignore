@@ -40,3 +40,4 @@
 # debug information files
 *.dwo
 SignalPatterns/SignalPatterns.code-workspace
+SignalPatterns/.vscode/settings.json

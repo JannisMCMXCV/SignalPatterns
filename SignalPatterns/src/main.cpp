@@ -6,18 +6,19 @@
 #include <WiFi.h>
 
 #include "main.h"
+#include "Arduino.h"
 
-// --------------------------------------
-// Globale Variablen-Definitionen
-// --------------------------------------
+// --------------------
+// Globale Variablen
+// --------------------
 DNSServer dnsServer;
 AsyncWebServer server(80);
 
 std::array<std::vector<TrackSegment>, 4> tracks = {
-  std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}},
-  std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}},
-  std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}},
-  std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}}  
+  std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE} },
+  std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE} },
+  std::vector<TrackSegment>{ TrackSegment{441.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{586.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE} },
+  std::vector<TrackSegment>{ TrackSegment{441.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{586.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE} }  
 };
 std::array<std::vector<TrackSegment>, 4> synthHorn = {
   std::vector<TrackSegment>{ TrackSegment{335.0f, WaveForm::WF_SQUARE, 10000, Transition::TR_NONE} },
@@ -33,10 +34,6 @@ volatile bool stopDacRequested = false;
 
 hw_timer_t* timer = nullptr;
 
-int       masterTrackIndex      = -1;
-uint32_t  masterTotalSamples    = 0;
-uint32_t  masterSamplesLeft     = 0;
-
 int       currentSegmentIndices[4] = {0,0,0,0};
 uint32_t  segSamplesLeft[4]        = {0,0,0,0};
 uint32_t  segElapsedSamples[4]     = {0,0,0,0};
@@ -48,9 +45,25 @@ uint32_t  linearFadeSamples        = 1;
 float     invLinearFadeSamples     = 1.0f;
 float     expAlpha                 = 0.0f;
 
-// --------------------------------------
-// Hilfsfunktionen (nicht im ISR ändern)
-// --------------------------------------
+TaskHandle_t dacTaskHandle = NULL;
+
+void setup() {
+  Serial.begin(115200);
+  dac_output_enable(DAC_CHANNEL_1);
+  dac_output_enable(DAC_CHANNEL_2);
+  initTracks();
+  
+  startDacTask();
+  Serial.println("DAC Synth gestartet!");
+  Serial.println("Setup finished!");
+}
+
+void loop() {
+  //dnsServer.processNextRequest();
+  Serial.println("da schau her, die scheiße läuft parallel");
+  delay(1000);
+}
+
 static inline uint32_t msToSamples(uint32_t ms) {
   // Mindestens 1 Sample, um 0-Dauern zu vermeiden
   uint32_t s = (uint32_t)((uint64_t)ms * SAMPLE_RATE / 1000ULL);
@@ -85,72 +98,45 @@ static inline float generateWave(WaveForm waveForm, float phase) {
   }
 }
 
-void determineMasterTrack() {
-  uint32_t maxDurationSamples = 0;
-  int best = -1;
-
-  for (int i = 0; i < 4; ++i) {
-    uint32_t totalMs = 0;
-    for (const auto& seg : (*activeTracks)[i]) totalMs += seg.duration;
-    uint32_t totalSamples = msToSamples(totalMs);
-    if (totalSamples > maxDurationSamples) {
-      maxDurationSamples = totalSamples;
-      best = i;
+void normalizeTrackLengths(std::array<std::vector<TrackSegment>, 4>& tracks) {
+    // 1. Gesamtdauer pro Track berechnen
+    std::array<uint16_t, 4> trackDurations = {0,0,0,0};
+    for (int i = 0; i < 4; ++i) {
+        for (const auto& seg : tracks[i]) {
+            trackDurations[i] += seg.duration;
+        }
     }
-  }
 
-  masterTrackIndex   = best;
-  masterTotalSamples = maxDurationSamples;
-  masterSamplesLeft  = masterTotalSamples;
+    // 2. Längsten Track finden
+    uint16_t maxDuration = 0;
+    for (int i = 0; i < 4; ++i) {
+        if (trackDurations[i] > maxDuration) {
+            maxDuration = trackDurations[i];
+        }
+    }
 
-  if (masterTotalSamples == 0) masterTrackIndex = -1; // nichts zu spielen
+    // 3. Jeden Track auffüllen
+    for (int i = 0; i < 4; ++i) {
+        uint16_t diff = maxDuration - trackDurations[i];
+        if (diff > 0) {
+            // Stille-Segment einfügen (Frequenz 0)
+            tracks[i].push_back(TrackSegment{0.0f, WaveForm::WF_SQUARE, diff, Transition::TR_NONE});
+        }
+    }
 }
 
-static void IRAM_ATTR onTimer() {
-  if (stopDacRequested) {
-    dacIsPlaying = false;
-    stopDacRequested = false;
-    return;
-  }
-  if (!dacIsPlaying || masterTrackIndex == -1) return;
+void playDacSample() {
+  float mix = 0.0f;
 
-  // Master-Loop runterzählen
-  if (masterSamplesLeft > 0) {
-    masterSamplesLeft--;
-  }
-
-  if (masterSamplesLeft == 0) {
-    // Alle Tracks synchron neu starten
-    masterSamplesLeft = masterTotalSamples;
-    for (int i = 0; i < 4; ++i) {
-      currentSegmentIndices[i] = 0;
-      segElapsedSamples[i]     = 0;
-      if (!(*activeTracks)[i].empty()) {
-        segSamplesLeft[i] = msToSamples((*activeTracks)[i][0].duration);
-        phaseAccumulators[i] = 0.0f;
-        updatePhaseStep(i, (*activeTracks)[i][0].freq);
-        gainExp[i] = ((*activeTracks)[i][0].transition == Transition::TR_EXP) ? 0.001f : 1.0f;
-      } else {
-        segSamplesLeft[i] = 0;
-        phaseAccumulators[i] = 0.0f;
-        gainExp[i] = 1.0f;
-      }
-    }
-  }
-
-  float mix = 0.0f; // bipolar
-
-  // Pro Track: Sample erzeugen
   for (int t = 0; t < 4; ++t) {
-    if ((*activeTracks)[t].empty() || segSamplesLeft[t] == 0) continue;
-    // aktuelles Segment
-    const int segIdx = currentSegmentIndices[t];
+    if ((*activeTracks)[t].empty() || segSamplesLeft[t] <= 0) continue;
+
+    int segIdx = currentSegmentIndices[t];
     const TrackSegment& seg = (*activeTracks)[t][segIdx];
 
-    // Wellenform-Sample
+    // Waveform
     float s = generateWave(seg.waveForm, phaseAccumulators[t]);
 
-    // Hüllkurve (Gain 0..1)
     float g = 1.0f;
     switch (seg.transition) {
       case Transition::TR_LINEAR:
@@ -163,7 +149,7 @@ static void IRAM_ATTR onTimer() {
         // One-pole Richtung 1.0
         gainExp[t] += (1.0f - gainExp[t]) * expAlpha;
         if (gainExp[t] > 1.0f) gainExp[t] = 1.0f;
-        g = gainExp[t];
+      g = gainExp[t];
         break;
       case Transition::TR_NONE:
       default:
@@ -173,113 +159,39 @@ static void IRAM_ATTR onTimer() {
 
     mix += s * g;
 
-    // Phase voran
+    // Phase advance
     phaseAccumulators[t] += phaseStep[t];
     // Mehrfach-Wrap verhindern (bei sehr hoher freq)
     if (phaseAccumulators[t] >= 2.0f * (float)M_PI) {
       phaseAccumulators[t] = fmodf(phaseAccumulators[t], 2.0f * (float)M_PI);
     }
 
-    // Segment-Zähler
     segElapsedSamples[t]++;
     segSamplesLeft[t]--;
 
     // Segmentwechsel
     if (segSamplesLeft[t] == 0) {
-      const int nextIdx = (segIdx + 1) % (*activeTracks)[t].size();
-      currentSegmentIndices[t] = nextIdx;
-      segElapsedSamples[t]     = 0;
-      phaseAccumulators[t]     = 0.0f;
+      segIdx = (segIdx + 1) % (*activeTracks)[t].size();
+      currentSegmentIndices[t] = segIdx;
+      segElapsedSamples[t] = 0;
+      phaseAccumulators[t] = 0.0f;
 
       if (!(*activeTracks)[t].empty()) {
-        const TrackSegment& nextSeg = (*activeTracks)[t][nextIdx];
+        const TrackSegment& nextSeg = (*activeTracks)[t][segIdx];
         segSamplesLeft[t] = msToSamples(nextSeg.duration);
         updatePhaseStep(t, nextSeg.freq);
         gainExp[t] = (nextSeg.transition == Transition::TR_EXP) ? 0.001f : 1.0f;
       }
     }
   }
-
-  // Mischen: auf -1..1 normalisieren
-  mix /= activeTracks->size();
-
-  // In 0..255 verschieben + clampen
+  
+  // Normalize + Output
+    mix /= activeTracks->size();
   int val = (int)(mix * 127.0f + 128.0f);
   if (val < 0) val = 0; else if (val > 255) val = 255;
 
-  dac_output_voltage(DAC_CHANNEL_1, (uint8_t)val); // GPIO 25
-  dac_output_voltage(DAC_CHANNEL_2, (uint8_t)val); // GPIO 26
-}
-
-void initAudioEngine() {
-  // DAC
-  dac_output_enable(DAC_CHANNEL_1); // GPIO 25
-  dac_output_enable(DAC_CHANNEL_2); // GPIO 26
-
-  // Hüllkurvenkonstanten
-  linearFadeSamples     = msToSamples(LINEAR_FADE_MS);
-  invLinearFadeSamples  = 1.0f / (float)linearFadeSamples;
-
-  const float tauSamples = (float)msToSamples(EXP_TAU_MS);
-  expAlpha = 1.0f - expf(-1.0f / tauSamples); // pro Sample
-
-  // Timer (1 MHz Takt = APB/80, dann Alarm = 1e6 / SR)
-  timer = timerBegin(0, 80, true);
-  timerAttachInterrupt(timer, &onTimer, true);
-
-  timerAlarmWrite(timer, 1000000UL / SAMPLE_RATE, true);
-  timerAlarmEnable(timer);
-}
-
-void playDACLoop() {
-  if (dacIsPlaying) return;
-  stopDacRequested = false;
-  timerAlarmEnable(timer);
-
-  // Master-Track bestimmen und Gesamtdauer in Samples
-  determineMasterTrack();
-  if (masterTrackIndex == -1) {
-    // nichts zu spielen
-    return;
-  }
-
-  // Alle Tracks initialisieren
-  for (int i = 0; i < 4; ++i) {
-    currentSegmentIndices[i] = 0;
-    segElapsedSamples[i]     = 0;
-    if (!(*activeTracks)[i].empty()) {
-      const auto& seg0 = (*activeTracks)[i][0];
-      segSamplesLeft[i]    = msToSamples(seg0.duration);
-      phaseAccumulators[i] = 0.0f;
-      updatePhaseStep(i, seg0.freq);
-      gainExp[i] = (seg0.transition == Transition::TR_EXP) ? 0.001f : 1.0f;
-    } else {
-      segSamplesLeft[i]    = 0;
-      phaseAccumulators[i] = 0.0f;
-      gainExp[i]           = 1.0f;
-    }
-  }
-
-  // Master-Zähler setzen
-  masterSamplesLeft = masterTotalSamples;
-
-  dacIsPlaying = true;
-}
-
-
-void stopDACLoop() {
-  stopDacRequested = true;
-  delay(10); // allow interrupt to process stop request
-  timerAlarmDisable(timer);
-  dacIsPlaying = false;
-
-  resetDacOutput();
-  activeTracks = &tracks;
-}
-
-void resetDacOutput() {
-  dac_output_voltage(DAC_CHANNEL_1, 128);
-  dac_output_voltage(DAC_CHANNEL_2, 128);
+  dac_output_voltage(DAC_CHANNEL_1, (uint8_t)val);
+  dac_output_voltage(DAC_CHANNEL_2, (uint8_t)val);
 }
 
 
@@ -303,7 +215,7 @@ void loadMorseMessage() {
       Serial.println("Fehler: konnte morseMessage.txt nicht öffnen!");
       return;
     }
-
+    
     // morseMessage = f.readString();
     f.close();
     // Serial.println("morseMessage.txt geladen: " + morseMessage);
@@ -322,29 +234,63 @@ void saveMorseMessage() {
 void setupServer() {
 }
 
+void dacTask(void* parameter) {
+  normalizeTrackLengths(tracks);
+  int64_t nextTick = esp_timer_get_time();
+  while (true) {
+    playDacSample();
 
-void setup() {
-  Serial.begin(115200);
-  pinMode(GPIO_HORN, OUTPUT);
-  stopRealHorn();
+    // Nächster Zeitpunkt
+    nextTick += SAMPLE_INTERVAL_US;
 
-  pinMode(GPIO_SIGNAL_ENABLE, INPUT_PULLDOWN);
-  pinMode(GPIO_SIGNAL_SELECT, INPUT_PULLDOWN);
+    // warten bis dahin
+    int64_t now = esp_timer_get_time();
+    if (now < nextTick) {
+      // busy-wait oder vTaskDelay je nach Präzision
+      ets_delay_us((uint32_t)(nextTick - now));
+    } else {
+      // falls wir hinterherhinken, sofort weiter
+      nextTick = now;
+    }
+  }
+}
 
-  pinMode(GPIO_HORN_ENABLE, INPUT_PULLUP);
-  pinMode(GPIO_HONK_EMERGENCY, INPUT_PULLUP);
+void startDacTask() {
+  Serial.println("starting DAC Task...");
+  xTaskCreatePinnedToCore(
+    dacTask, "DAC Task",
+    4096, NULL, 2, &dacTaskHandle,
+    1
+  );
+}
 
-  initAudioEngine();
+void pauseDacTask() {
+  if (dacTaskHandle != NULL) {
+    vTaskSuspend(dacTaskHandle);
+  }
+}
 
-  if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed, trying to format...");
-  Serial.println("LittleFS mounted.");
+void resumeDacTask() {
+  if (dacTaskHandle != NULL) {
+    vTaskResume(dacTaskHandle);
+  }
+}
 
-  server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+void killDacTask() {
+  vTaskDelete(dacTaskHandle);
+  dacTaskHandle = NULL;
+}
 
-  loadHonkEmergencyPattern();
-  loadEmergencyPattern();
-  loadMorseMessage();
-  setupServer();
+void initTracks() {
+  for (int i = 0; i < 4; i++) {
+    TrackSegment &seg = (*activeTracks)[i][0];
+    currentSegmentIndices[i] = 0;
+    segElapsedSamples[i] = 0;
+    segSamplesLeft[i] = msToSamples(seg.duration);
+    phaseAccumulators[i] = 0.0f;
+    updatePhaseStep(i, seg.freq);
+    gainExp[i] = (seg.transition == Transition::TR_EXP) ? 0.001f : 1.0f;
+  }
 }
 
 bool hotSwapRequired(bool dacIsPlaying) {
@@ -375,33 +321,33 @@ Transition transitionFromString(const char* tr) {
 
 std::array<std::vector<TrackSegment>, 4> parseTracksFromJson(const String& jsonTracks) {
   std::array<std::vector<TrackSegment>, 4> tracksOut;
-
+  
   // !Wichtig!: ausreichend großes JsonDocument anlegen
   // Dein Beispiel-JSON ist ~600 Bytes groß, also nehmen wir hier 2048, um sicher zu gehen
   JsonDocument doc;
-
+  
   DeserializationError error = deserializeJson(doc, jsonTracks);
   if (error) {
     Serial.print(F("deserializeJson() failed: "));
     Serial.println(error.f_str());
     return tracksOut; // leer zurückgeben
   }
-
+  
   JsonArray tracks = doc["tracks"].as<JsonArray>();
   uint8_t trackIdx = 0;
   for (JsonArray trackArray : tracks) {
-      for (JsonObject seg : trackArray) {
-          TrackSegment ts;
-          ts.freq       = seg["freq"] | 0.0f;
-          ts.waveForm   = waveformFromString(seg["waveform"] | "");
-          ts.duration   = seg["duration"] | 0;
-          ts.transition = transitionFromString(seg["transition"] | "");
-
-          tracksOut[trackIdx].push_back(ts);
-      }
-      trackIdx++;
+    for (JsonObject seg : trackArray) {
+      TrackSegment ts;
+      ts.freq       = seg["freq"] | 0.0f;
+      ts.waveForm   = waveformFromString(seg["waveform"] | "");
+      ts.duration   = seg["duration"] | 0;
+      ts.transition = transitionFromString(seg["transition"] | "");
+      
+      tracksOut[trackIdx].push_back(ts);
+    }
+    trackIdx++;
   }
-
+  
   return tracksOut;
 }
 
@@ -454,12 +400,6 @@ void loadConfig() {
   
   
   dnsServer.start(53, domain, ip);
-}
-  
-  
-  
-void loop() {
-  //dnsServer.processNextRequest();
 }
 
 boolean signalIsEnabled() {

@@ -21,6 +21,7 @@ constexpr uint8_t GPIO_HONK_EMERGENCY = 14; // LOW: Enable → erzwingt Nutzung 
 constexpr uint32_t SAMPLE_RATE      = 44100;   // ggf. 32000 für geringere Last
 constexpr uint32_t LINEAR_FADE_MS   = 50;      // Dauer des linearen Fade-Ins
 constexpr uint32_t EXP_TAU_MS       = 100;     // Zeitkonstante für exp-Fade-In
+constexpr uint32_t SAMPLE_INTERVAL_US (1000000 / SAMPLE_RATE);
 
 // --------------------------------------
 // Datentypen
@@ -47,10 +48,6 @@ extern volatile bool stopDacRequested;
 
 extern hw_timer_t* timer;
 
-extern int       masterTrackIndex;
-extern uint32_t  masterTotalSamples;
-extern uint32_t  masterSamplesLeft;
-
 extern int       currentSegmentIndices[4];
 extern uint32_t  segSamplesLeft[4];
 extern uint32_t  segElapsedSamples[4];
@@ -62,10 +59,12 @@ extern uint32_t  linearFadeSamples;
 extern float     invLinearFadeSamples;
 extern float     expAlpha;
 
+extern TaskHandle_t dacTaskHandle;
+
 // --------------------------------------
 // Funktions-Prototypen
 // --------------------------------------
-void initAudioEngine();
+void initTracks();
 void playDACLoop();
 void stopDACLoop();
 void resetDacOutput();
@@ -73,6 +72,12 @@ void honk();
 void stopHonk();
 void stopRealHorn();
 void playRealHorn();
+
+void dacTask(void* parameter);
+void startDacTask();
+void pauseDacTask();
+void resumeDacTask();
+void killDacTask();
 
 void determineMasterTrack();
 std::array<std::vector<TrackSegment>, 4> parseTracksFromJson(const String& jsonTracks);
