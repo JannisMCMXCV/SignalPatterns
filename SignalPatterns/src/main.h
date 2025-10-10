@@ -16,6 +16,28 @@ constexpr uint8_t GPIO_HORN_ENABLE    = 12; // LOW: Enable → echtes Horn
 constexpr uint8_t GPIO_HONK_EMERGENCY = 14; // LOW: Enable → erzwingt Nutzung des Horns
 
 // --------------------------------------
+// GPIO-Pin States
+// --------------------------------------
+
+extern uint8_t GPIO_SIGNAL_ENABLE_LAST_STATE;
+extern uint8_t GPIO_SIGNAL_SELECT_LAST_STATE;
+
+extern uint8_t GPIO_HORN_ENABLE_LAST_STATE;
+extern uint8_t GPIO_HONK_EMERGENCY_LAST_STATE;
+
+// --------------------------------------
+// GPIO-Pin Change Times
+// --------------------------------------
+
+extern unsigned long GPIO_SIGNAL_ENABLE_LAST_CHANGE_TIME;
+extern unsigned long GPIO_SIGNAL_SELECT_LAST_CHANGE_TIME;
+
+extern unsigned long GPIO_HORN_ENABLE_LAST_CHANGE_TIME;
+extern unsigned long GPIO_HONK_EMERGENCY_LAST_CHANGE_TIME;
+
+constexpr unsigned long DEBOUNCE_MS = 10L;
+
+// --------------------------------------
 // Konfiguration
 // --------------------------------------
 constexpr uint32_t SAMPLE_RATE      = 44100;   // ggf. 32000 für geringere Last
@@ -60,26 +82,43 @@ extern float     invLinearFadeSamples;
 extern float     expAlpha;
 
 extern TaskHandle_t dacTaskHandle;
+extern TaskHandle_t hornTaskHandle;
+
+// --------------------------------------
+// Task-Names
+// --------------------------------------
+
+constexpr const char* DAC_TASK = "DAC-Task";
+constexpr const char* HORN_TASK = "Horn-Task";
 
 // --------------------------------------
 // Funktions-Prototypen
 // --------------------------------------
+void doConfig();
+String readFile(const char* path);
+
+bool debouncedInputHasChanged(uint8_t input, unsigned long &lastChange, uint8_t &lastState);
+
 void initTracks();
-void playDACLoop();
-void stopDACLoop();
-void resetDacOutput();
 void honk();
+void emergencySignal();
 void stopHonk();
 void stopRealHorn();
 void playRealHorn();
+void controlAudioOutput();
+void updateAcousticSignal();
 
 void dacTask(void* parameter);
-void startDacTask();
-void pauseDacTask();
-void resumeDacTask();
-void killDacTask();
+void hornTask(void* parameter);
+void startTask(TaskFunction_t task, TaskHandle_t *handle, const char* taskName);
+void pauseTask(TaskHandle_t &handle);
+void resumeTask(TaskHandle_t &handle);
+void killTask(TaskHandle_t &handle);
 
-void determineMasterTrack();
+bool signalIsEnabled();
+bool emergencyIsSelected();
+
+
 std::array<std::vector<TrackSegment>, 4> parseTracksFromJson(const String& jsonTracks);
 
 WaveForm waveformFromString(const char* wf);

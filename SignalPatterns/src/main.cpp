@@ -14,6 +14,17 @@
 DNSServer dnsServer;
 AsyncWebServer server(80);
 
+uint8_t GPIO_SIGNAL_ENABLE_LAST_STATE;
+uint8_t GPIO_SIGNAL_SELECT_LAST_STATE;
+uint8_t GPIO_HORN_ENABLE_LAST_STATE;
+uint8_t GPIO_HONK_EMERGENCY_LAST_STATE;
+
+unsigned long GPIO_SIGNAL_ENABLE_LAST_CHANGE_TIME;
+unsigned long GPIO_SIGNAL_SELECT_LAST_CHANGE_TIME;
+
+unsigned long GPIO_HORN_ENABLE_LAST_CHANGE_TIME;
+unsigned long GPIO_HONK_EMERGENCY_LAST_CHANGE_TIME;
+
 std::array<std::vector<TrackSegment>, 4> tracks = {
   std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE} },
   std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE} },
@@ -27,7 +38,7 @@ std::array<std::vector<TrackSegment>, 4> synthHorn = {
   std::vector<TrackSegment>{ TrackSegment{335.0f, WaveForm::WF_SQUARE, 10000, Transition::TR_NONE} }
 };
 
-std::array<std::vector<TrackSegment>, 4>* activeTracks = &tracks;
+std::array<std::vector<TrackSegment>, 4>* activeTracks = &synthHorn;
 
 volatile bool dacIsPlaying     = false;
 volatile bool stopDacRequested = false;
@@ -46,22 +57,170 @@ float     invLinearFadeSamples     = 1.0f;
 float     expAlpha                 = 0.0f;
 
 TaskHandle_t dacTaskHandle = NULL;
+TaskHandle_t hornTaskHandle = NULL;
+
 
 void setup() {
   Serial.begin(115200);
+  pinMode(GPIO_HORN, OUTPUT);
+  stopRealHorn();
+
+  pinMode(GPIO_SIGNAL_ENABLE, INPUT_PULLDOWN);
+  pinMode(GPIO_SIGNAL_SELECT, INPUT_PULLDOWN);
+
+  pinMode(GPIO_HORN_ENABLE, INPUT_PULLUP);
+  pinMode(GPIO_HONK_EMERGENCY, INPUT_PULLUP);
+
+  GPIO_SIGNAL_ENABLE_LAST_STATE = digitalRead(GPIO_SIGNAL_ENABLE);
+  GPIO_SIGNAL_SELECT_LAST_STATE = digitalRead(GPIO_SIGNAL_SELECT);
+
+  GPIO_HORN_ENABLE_LAST_STATE = digitalRead(GPIO_HORN_ENABLE);
+  GPIO_HONK_EMERGENCY_LAST_STATE = digitalRead(GPIO_HONK_EMERGENCY);
+
+  auto now = millis();
+  GPIO_SIGNAL_ENABLE_LAST_CHANGE_TIME = now;
+  GPIO_SIGNAL_SELECT_LAST_CHANGE_TIME = now;
+  GPIO_HORN_ENABLE_LAST_CHANGE_TIME = now;
+  GPIO_HONK_EMERGENCY_LAST_CHANGE_TIME = now;
+
   dac_output_enable(DAC_CHANNEL_1);
   dac_output_enable(DAC_CHANNEL_2);
   initTracks();
   
-  startDacTask();
+  startTask(dacTask, &dacTaskHandle, DAC_TASK);
+
   Serial.println("DAC Synth gestartet!");
   Serial.println("Setup finished!");
 }
 
 void loop() {
-  //dnsServer.processNextRequest();
-  Serial.println("da schau her, die scheiße läuft parallel");
-  delay(1000);
+  // dnsServer.processNextRequest();
+  controlAudioOutput();
+}
+
+void controlAudioOutput() {
+    bool signalEnabledChanged = debouncedInputHasChanged(GPIO_SIGNAL_ENABLE, GPIO_SIGNAL_ENABLE_LAST_CHANGE_TIME, GPIO_SIGNAL_ENABLE_LAST_STATE);
+    bool signalEnabled = signalIsEnabled();  
+    
+    if (signalEnabledChanged && !signalEnabled) {
+      stopRealHorn();
+      killTask(dacTaskHandle);
+      return;
+    }
+    
+    if (!(signalEnabledChanged || signalEnabled)) {
+      return;
+    }
+
+    updateAcousticSignal();
+
+}
+
+void updateAcousticSignal() {
+  bool selectionHasChanged = debouncedInputHasChanged(GPIO_SIGNAL_SELECT, GPIO_SIGNAL_SELECT_LAST_CHANGE_TIME, GPIO_SIGNAL_SELECT_LAST_STATE);
+  bool emergencySignalSelectionHasChanged = debouncedInputHasChanged(GPIO_HONK_EMERGENCY, GPIO_HONK_EMERGENCY_LAST_CHANGE_TIME, GPIO_HONK_EMERGENCY_LAST_STATE);
+   
+  if (selectionHasChanged && !emergencyIsSelected()) {
+    honk();
+  } else if (emergencyIsSelected() && (selectionHasChanged || emergencySignalSelectionHasChanged)) {
+    emergencySignal();
+  }
+}
+
+bool debouncedInputHasChanged(uint8_t input, unsigned long &lastChange, uint8_t &lastState) {
+  if (millis() < lastChange + DEBOUNCE_MS) return false;
+
+  uint8_t reading = digitalRead(input);
+  if (reading == lastState) return false;
+
+  lastState = reading;
+  lastChange = millis();
+  return true;
+}
+
+bool signalIsEnabled() {
+  return digitalRead(GPIO_SIGNAL_ENABLE) == HIGH;
+}
+
+bool emergencyIsSelected() {
+  return digitalRead(GPIO_SIGNAL_SELECT) == LOW;
+}
+
+bool synthesizeHorn() {
+  return digitalRead(GPIO_HORN_ENABLE) == HIGH;
+}
+
+bool useHornForEmergencySignal() {
+  return digitalRead(GPIO_HONK_EMERGENCY) == LOW;
+}
+
+void honk() {
+  if (synthesizeHorn()) {
+    activeTracks = &synthHorn;
+    startTask(dacTask, &dacTaskHandle, DAC_TASK);
+  } else {
+    playRealHorn();
+  }
+}
+
+void emergencySignal() {
+  if (useHornForEmergencySignal()) {
+    startTask(hornTask, &hornTaskHandle, HORN_TASK);
+  } else {
+    activeTracks = &tracks;
+    startTask(dacTask, &dacTaskHandle, DAC_TASK);
+
+  }
+}
+
+void playRealHorn() {
+  digitalWrite(GPIO_HORN, LOW);
+}
+
+void stopHonk() {
+  if (synthesizeHorn()) {
+    pauseTask(dacTaskHandle);
+  }
+  stopRealHorn();
+}
+
+void stopRealHorn() {
+  digitalWrite(GPIO_HORN, HIGH);
+}
+
+void doConfig() {
+  String json = readFile("/config/config.json");
+  if(json == "") return;
+  
+  JsonDocument config;
+  DeserializationError error = deserializeJson(config, json.c_str());
+  
+  if(error){
+    Serial.print("JSON Parsing Error: ");
+    Serial.println(error.c_str());
+    return;
+  }
+  
+  const char* ssid = config["wifi"]["ssid"];
+  const char* password = config["wifi"]["pw"];
+  
+  const char* domain = config["domain"];
+  
+  if (strlen(password) < 8) {
+    WiFi.softAP(ssid);
+  } else {
+    WiFi.softAP(ssid, password);
+  }
+  
+  Serial.println("Access Point started");
+  Serial.print("IP Address: ");
+  IPAddress ip = WiFi.softAPIP();
+  Serial.println(ip);
+  Serial.println("SSID: " + String(ssid));
+  Serial.println("Passwort: " + String(password));
+  
+  
+  dnsServer.start(53, domain, ip);
 }
 
 static inline uint32_t msToSamples(uint32_t ms) {
@@ -255,30 +414,34 @@ void dacTask(void* parameter) {
   }
 }
 
-void startDacTask() {
-  Serial.println("starting DAC Task...");
+void hornTask(void* parameter) {
+
+}
+
+void startTask(TaskFunction_t task, TaskHandle_t *handle, const char* taskName) {
+  if (*handle != NULL) return;
+
   xTaskCreatePinnedToCore(
-    dacTask, "DAC Task",
-    4096, NULL, 2, &dacTaskHandle,
+    task, taskName,
+    4096, NULL, 2, handle,
     1
   );
 }
 
-void pauseDacTask() {
-  if (dacTaskHandle != NULL) {
-    vTaskSuspend(dacTaskHandle);
-  }
+void pauseTask(TaskHandle_t &handle) {
+  if (handle == NULL)  return;
+  vTaskSuspend(handle);
 }
 
-void resumeDacTask() {
-  if (dacTaskHandle != NULL) {
-    vTaskResume(dacTaskHandle);
-  }
+void resumeTask(TaskHandle_t &handle) {
+  if (handle == NULL) return;
+  vTaskResume(handle);
 }
 
-void killDacTask() {
-  vTaskDelete(dacTaskHandle);
-  dacTaskHandle = NULL;
+void killTask(TaskHandle_t &handle) {
+  if (handle == NULL) return;
+  vTaskDelete(handle);
+  handle = NULL;
 }
 
 void initTracks() {
@@ -299,9 +462,9 @@ bool hotSwapRequired(bool dacIsPlaying) {
 
 void updateDacSettings(String jsonTracks) {
   bool doHotSwap = hotSwapRequired(dacIsPlaying);
-  if (doHotSwap) stopDACLoop();
+  if (doHotSwap) killTask(dacTaskHandle);
   tracks = parseTracksFromJson(jsonTracks);
-  if (doHotSwap) playDACLoop();
+  if (doHotSwap) startTask(dacTask, &dacTaskHandle, DAC_TASK);
 }
 
 WaveForm waveformFromString(const char* wf) {
@@ -367,76 +530,3 @@ String readFile(const char* path) {
   return content;
 }
 
-void loadConfig() {
-  String json = readFile("/config/config.json");
-  if(json == "") return;
-  
-  JsonDocument config;
-  DeserializationError error = deserializeJson(config, json.c_str());
-  
-  if(error){
-    Serial.print("JSON Parsing Error: ");
-    Serial.println(error.c_str());
-    return;
-  }
-  
-  const char* ssid = config["wifi"]["ssid"];
-  const char* password = config["wifi"]["pw"];
-  
-  const char* domain = config["domain"];
-  
-  if (strlen(password) < 8) {
-    WiFi.softAP(ssid);
-  } else {
-    WiFi.softAP(ssid, password);
-  }
-  
-  Serial.println("Access Point started");
-  Serial.print("IP Address: ");
-  IPAddress ip = WiFi.softAPIP();
-  Serial.println(ip);
-  Serial.println("SSID: " + String(ssid));
-  Serial.println("Passwort: " + String(password));
-  
-  
-  dnsServer.start(53, domain, ip);
-}
-
-boolean signalIsEnabled() {
-  return digitalRead(GPIO_SIGNAL_ENABLE) == HIGH;
-}
-
-boolean emergencyIsSelected() {
-  return digitalRead(GPIO_SIGNAL_SELECT) == LOW;
-}
-
-boolean synthesizeHorn() {
-  return digitalRead(GPIO_HORN_ENABLE) == HIGH;
-}
-
-boolean useHornForEmergencySignal() {
-  return digitalRead(GPIO_HONK_EMERGENCY) == LOW;
-}
-
-void honk() {
-  if (synthesizeHorn()) {
-    activeTracks = &synthHorn;
-    playDACLoop();
-  }
-  playRealHorn();
-}
-
-void playRealHorn() {
-  digitalWrite(GPIO_HORN, LOW);
-}
-
-void stopHonk() {
-  if (synthesizeHorn()) {
-    stopDACLoop();
-  }
-  stopRealHorn();
-}
-
-void stopRealHorn() {
-  digitalWrite(GPIO_HORN, HIGH);
-}
