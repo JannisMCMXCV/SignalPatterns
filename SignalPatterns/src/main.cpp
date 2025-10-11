@@ -25,6 +25,8 @@ unsigned long GPIO_SIGNAL_SELECT_LAST_CHANGE_TIME;
 unsigned long GPIO_HORN_ENABLE_LAST_CHANGE_TIME;
 unsigned long GPIO_HONK_EMERGENCY_LAST_CHANGE_TIME;
 
+HonkPattern emergencyHonkPattern = { FirstSegment::FIRST_HIGH, std::vector<uint32_t>{25, 400, 25, 200, 20, 100, 25, 50, 25, 25, 25, 13, 25, 12, 25, 500} }; // Sollte sich bisschen bouncy anhören.
+
 std::array<std::vector<TrackSegment>, 4> tracks = {
   std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE} },
   std::vector<TrackSegment>{ TrackSegment{440.0f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE}, TrackSegment{587.33f, WaveForm::WF_SQUARE, 750, Transition::TR_NONE} },
@@ -87,7 +89,7 @@ void setup() {
   dac_output_enable(DAC_CHANNEL_2);
   initTracks();
   
-  startTask(dacTask, &dacTaskHandle, DAC_TASK);
+  startTask(hornTask, &hornTaskHandle, HORN_TASK);
 
   Serial.println("DAC Synth gestartet!");
   Serial.println("Setup finished!");
@@ -157,7 +159,8 @@ bool useHornForEmergencySignal() {
 void honk() {
   if (synthesizeHorn()) {
     activeTracks = &synthHorn;
-    startTask(dacTask, &dacTaskHandle, DAC_TASK);
+    if (dacTaskHandle == NULL) startTask(dacTask, &dacTaskHandle, DAC_TASK);
+    else (resumeTask(dacTaskHandle));
   } else {
     playRealHorn();
   }
@@ -415,7 +418,24 @@ void dacTask(void* parameter) {
 }
 
 void hornTask(void* parameter) {
+  while (true) {
+    if (emergencyHonkPattern.patternChanges.empty()) {
+      vTaskDelay(100 / portTICK_PERIOD_MS); // kleine Pause, falls Pattern leer
+        continue;
+      }
 
+    TickType_t lastWakeTime = xTaskGetTickCount();
+    bool firstHigh = (emergencyHonkPattern.first == FirstSegment::FIRST_HIGH);
+
+    for (size_t i = 0; i < emergencyHonkPattern.patternChanges.size(); i++) {
+      // honk() oder stopHonk() je nach Index & Startstatus
+      ((i % 2 == 0) == firstHigh ? honk : stopHonk)();
+
+      TickType_t delayTicks = emergencyHonkPattern.patternChanges[i] / portTICK_PERIOD_MS;
+      if (delayTicks < 1) delayTicks = 1;
+        vTaskDelayUntil(&lastWakeTime, delayTicks);
+    }
+  }
 }
 
 void startTask(TaskFunction_t task, TaskHandle_t *handle, const char* taskName) {

@@ -58,6 +58,15 @@ struct TrackSegment {
   Transition transition;  // siehe Transition
 };
 
+enum class FirstSegment : uint8_t {FIRST_HIGH, FIRST_LOW};
+
+struct HonkPattern {
+  FirstSegment          first;          // FIRST_HIGH := Erste Laufzeit: Ton; FIRST_LOW := Erste Laufzeit: still
+  std::vector<uint32_t> patternChanges; // vector von Laufzeiten. (wechseln immer ab zwischen Ton und Stille)
+};
+
+extern HonkPattern emergencyHonkPattern;
+
 // --------------------------------------
 // Globale Variablen (nur deklariert, in .cpp definiert)
 // --------------------------------------
